@@ -88,21 +88,28 @@ struct Inner<W> {
     /// Space for writing the header of a chunk before writing it to the
     /// underlying writer.
     chunk_header: [u8; 8],
+    src_len: usize,
 }
 
 impl<W: Write> Writer<W> {
-    /// Create a new writer for streaming Snappy compression.
-    pub fn new(wtr: W) -> Writer<W> {
+    /// Create a new writer with a given max block size for streaming Snappy compression.
+    pub fn with_max_block_size(wtr: W, max_block_size: usize) -> Writer<W> {
         Writer {
             inner: Some(Inner {
                 w: wtr,
                 enc: Encoder::new(),
-                dst: vec![0; *MAX_COMPRESS_BLOCK_SIZE],
+                dst: vec![0; max_compress_len(max_block_size)],
                 wrote_stream_ident: false,
                 chunk_header: [0; 8],
+                src_len: max_block_size,
             }),
-            src: Vec::with_capacity(MAX_BLOCK_SIZE),
+            src: Vec::with_capacity(max_block_size),
         }
+    }
+
+    /// Create a new writer for streaming Snappy compression.
+    pub fn new(wtr: W) -> Writer<W> {
+        Writer::with_max_block_size(wtr, MAX_BLOCK_SIZE)
     }
 
     /// Returns the underlying stream, consuming and flushing this writer.
@@ -161,7 +168,7 @@ impl<W: Write> Write for Writer<W> {
         self.src.extend_from_slice(buf);
         total += buf.len();
         // We should never expand or contract self.src.
-        debug_assert!(self.src.capacity() == MAX_BLOCK_SIZE);
+        debug_assert!(self.src.capacity() == self.inner.as_ref().unwrap().src_len);
         Ok(total)
     }
 
@@ -185,8 +192,8 @@ impl<W: Write> Inner<W> {
         while !buf.is_empty() {
             // Advance buf and get our block.
             let mut src = buf;
-            if src.len() > MAX_BLOCK_SIZE {
-                src = &src[0..MAX_BLOCK_SIZE];
+            if src.len() > self.src_len {
+                src = &src[0..self.src_len];
             }
             buf = &buf[src.len()..];
             let checksum = crc32c_masked(src);
